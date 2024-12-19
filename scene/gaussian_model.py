@@ -23,6 +23,7 @@ from utils.general_utils import strip_symmetric, build_scaling_rotation, chamfer
 import open3d as o3d
 from torch.optim.lr_scheduler import MultiStepLR
 from utils.sh_utils import eval_sh
+from gtracer import GaussianTracer
 
 
 class GaussianModel:
@@ -44,7 +45,7 @@ class GaussianModel:
 
         self.rotation_activation = torch.nn.functional.normalize
 
-    def __init__(self, args):
+    def __init__(self, args, transmittance_min=0.001):
         self.args = args
         self.active_sh_degree = 0
         self.max_sh_degree = args.sh_degree
@@ -64,6 +65,8 @@ class GaussianModel:
         self.setup_functions()
         self.bg_color = torch.empty(0)
         self.confidence = torch.empty(0)
+
+        self.gaussian_tracer = GaussianTracer(transmittance_min=transmittance_min)
 
     def capture(self):
         return (
@@ -739,3 +742,23 @@ class GaussianModel:
         #self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_features, new_opacities, new_scaling, new_rotation, new_depth_err, new_origin_xyz, new_xyz_weight)
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling,
                                    new_rotation, new_origin_xyz, new_xyz_weight)
+
+    def build_bvh(self):
+        vertices_b, faces_b, gs_id = self.get_boundings(alpha_min=self.alpha_min)
+        self.gaussian_tracer.build_bvh(vertices_b, faces_b, gs_id)
+        
+    def update_bvh(self):
+        vertices_b, faces_b, gs_id = self.get_boundings(alpha_min=self.alpha_min)
+        self.gaussian_tracer.update_bvh(vertices_b, faces_b, gs_id)
+        
+    def trace(self, rays_o, rays_d):
+        SinvR = self.get_SinvR()
+        means3D = self.get_xyz
+        shs = self.get_features
+        opacity = self.get_opacity
+        colors, depth, alpha = self.gaussian_tracer.trace(rays_o, rays_d, means3D, opacity, SinvR, shs, alpha_min=self.alpha_min, deg=self.active_sh_degree)
+        return {
+            "render": colors,
+            "depth": depth,
+            "alpha" : alpha,
+        }

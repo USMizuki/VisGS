@@ -113,18 +113,18 @@ def training(dataset, opt, pipe, args):
 
     progress_bar_mvs = tqdm(range(first_iter, opt.iterations_pre), desc="Pretraining progress")
     ema_loss_for_log = 0.0
-    from utils.general_utils import vis_depth
-    import cv2
-    import utils_io
-    os.system('rm -r ' + os.path.join(dataset.source_path, str(args.n_views) + '_views', 'ours_depth_maps'))
-    os.mkdir(os.path.join(dataset.source_path, str(args.n_views) + '_views', 'ours_depth_maps'))
-    for id, cam in tqdm(enumerate(scene_mvs.train_cameras[1.0])):
-        flow_depth = torch.tensor(cam.flow_depth).cuda()
-        depth_map = vis_depth(flow_depth.detach().cpu().numpy())
-        print(os.path.join(dataset.source_path, str(args.n_views) + '_views', 'ours_depth_maps', cam.image_name + '.png'))
-        cv2.imwrite(os.path.join(dataset.source_path, str(args.n_views) + '_views', 'ours_depth_maps', cam.image_name + '.png'), flow_depth.detach().cpu().numpy())
-        # np.save(os.path.join(dataset.source_path, 'ours_depth_maps', cam.image_name + '_depth.npy'), flow_depth.detach().cpu().numpy())
-        # utils_io.write_depth(os.path.join(dataset.source_path, 'ours_depth_maps', cam.image_name + '_depth'), flow_depth.detach().cpu().numpy(), bits=2)
+    # from utils.general_utils import vis_depth
+    # import cv2
+    # # import utils_io
+    # os.system('rm -r ' + os.path.join(dataset.source_path, str(args.n_views) + '_views', 'ours_depth_maps'))
+    # os.mkdir(os.path.join(dataset.source_path, str(args.n_views) + '_views', 'ours_depth_maps'))
+    # for id, cam in tqdm(enumerate(scene_mvs.train_cameras[1.0])):
+    #     flow_depth = torch.tensor(cam.flow_depth).cuda()
+    #     depth_map = vis_depth(flow_depth.detach().cpu().numpy())
+    #     print(os.path.join(dataset.source_path, str(args.n_views) + '_views', 'ours_depth_maps', cam.image_name + '.png'))
+    #     cv2.imwrite(os.path.join(dataset.source_path, str(args.n_views) + '_views', 'ours_depth_maps', cam.image_name + '.png'), flow_depth.detach().cpu().numpy())
+    #     # np.save(os.path.join(dataset.source_path, 'ours_depth_maps', cam.image_name + '_depth.npy'), flow_depth.detach().cpu().numpy())
+    #     # utils_io.write_depth(os.path.join(dataset.source_path, 'ours_depth_maps', cam.image_name + '_depth'), flow_depth.detach().cpu().numpy(), bits=2)
 
     for iteration in range(1, opt.iterations_pre + 1):
         if not viewpoint_stack:
