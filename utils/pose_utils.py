@@ -40,7 +40,12 @@ def recenter_poses(poses: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
   transform = np.linalg.inv(pad_poses(cam2world))
   poses = transform @ pad_poses(poses)
   return unpad_poses(poses), transform
-
+  
+# def recenter_poses(poses):
+#     """Recenter poses around the origin."""
+#     cam2world = poses_avg(poses)
+#     poses = np.linalg.inv(pad_poses(cam2world)) @ pad_poses(poses)
+#     return unpad_poses(poses)
 
 
 def generate_spiral_path(poses_arr,
@@ -206,7 +211,7 @@ def generate_ellipse_path(views, n_frames=600, const_speed=True, z_variation=0.,
 
 def generate_random_poses_llff(views):
     """Generates random poses."""
-    n_poses = 10000 # args.n_random_poses
+    n_poses = 50 # args.n_random_poses
     poses, bounds = [], []
     for view in views:
         tmp_view = np.eye(4)
@@ -312,3 +317,51 @@ def generate_random_poses_360(views, n_frames=10000, z_variation=0.1, z_phase=0)
         render_pose[:3, 1:3] *= -1
         render_poses.append(np.linalg.inv(render_pose))
     return render_poses
+
+def backcenter_poses(poses, pose_ref):
+    """Recenter poses around the origin."""
+    cam2world = poses_avg(pose_ref)
+    poses = pad_poses(cam2world) @ pad_poses(poses)
+    return unpad_poses(poses)
+
+
+def focus_pt_fn(poses):
+  """Calculate nearest point to all focal axes in poses."""
+  directions, origins = poses[:, :3, 2:3], poses[:, :3, 3:4]
+  m = np.eye(3) - directions * np.transpose(directions, [0, 2, 1])
+  mt_m = np.transpose(m, [0, 2, 1]) @ m
+  focus_pt = np.linalg.inv(mt_m.mean(0)) @ (mt_m @ origins).mean(0)[:, 0]
+  return focus_pt
+
+def convert_poses(poses):
+    poses = np.concatenate([poses[:, 1:2], poses[:, 0:1], -poses[:, 2:3], poses[:, 3:4], poses[:, 4:5]], 1).transpose(2,0,1)
+    bottom = np.tile(np.array([0,0,0,1.]).reshape([1,1,4]), (poses.shape[0], 1, 1))
+
+    H, W, fl = poses[0, :, -1]
+
+    poses = np.concatenate([poses[..., :4], bottom], 1)
+    poses = np.linalg.inv(poses)
+    Rs = poses[:, :3, :3]
+    tvecs = poses[:, :3, -1]
+    # print(Rs.shape, tvecs.shape, H, W, fl)
+    return Rs, tvecs, H, W, fl
+
+def generate_spiral_path_dtu(poses, n_frames=120, n_rots=2, zrate=.5, perc=60):
+  """Calculates a forward facing spiral path for rendering for DTU."""
+
+  # Get radii for spiral path using 60th percentile of camera positions.
+  positions = poses[:, :3, 3]
+  radii = np.percentile(np.abs(positions), perc, 0)
+  radii = np.concatenate([radii, [1.]])
+
+  # Generate poses for spiral path.
+  render_poses = []
+  cam2world = poses_avg(poses)
+  up = poses[:, :3, 1].mean(0)
+  z_axis = focus_pt_fn(poses)
+  for theta in np.linspace(0., 2. * np.pi * n_rots, n_frames, endpoint=False):
+    t = radii * [np.cos(theta), -np.sin(theta), -np.sin(theta * zrate), 1.]
+    position = cam2world @ t
+    render_poses.append(viewmatrix(z_axis, up, position, True))
+  render_poses = np.stack(render_poses, axis=0)
+  return render_poses

@@ -102,6 +102,10 @@ if __name__ == "__main__":
     parser.add_argument('--model_paths', '-m', required=True, nargs="+", type=str, default=[])
     parser.add_argument("--iteration", default=-1, type=int)
     args = parser.parse_args()
+    # name = str(args.dataset_type) + '_' + str(args.images) + '_' + str(args.flow_type) + '_' + str(args.flow_checkpoint) + '_scalelr' + str(args.scaling_lr) + '_depth' + str(args.depth_weight) + '_near' + str(args.near_n) + '_valid' + str(args.valid_dis_threshold) + '_drop' + str(args.drop_rate) + '_N' + str(args.split_num)
+    
+    # args.model_path = os.path.join(args.model_path, name, os.path.split(args.source_path)[-1], str(args.n_views) + '_views')
+    # print(args.model_path)
     # if not os.path.exists(os.path.join(args.model_paths[0], 'test', 'ours_'+str(args.iteration), 'renders')):
     # os.system('python render.py -s /mnt/vita-nas/zehao/nerf_llff_data/horns/ --iteration ' + str(args.iteration) + ' -m ' +args.model_paths[0])
     evaluate(args.model_paths)

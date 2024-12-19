@@ -31,14 +31,17 @@ from pathlib import Path
 from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
+from utils.flow_utils import readFlow
 
 class CameraInfo(NamedTuple):
     uid: int
     R: np.array
     T: np.array
+    K: np.array
     FovY: np.array
     FovX: np.array
     image: np.array
+    flow: list
     image_path: str
     image_name: str
     width: int
@@ -50,6 +53,7 @@ class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
     train_cameras: list
     test_cameras: list
+    eval_cameras: list
     nerf_normalization: dict
     ply_path: str
 
@@ -161,8 +165,9 @@ def readColmapCameras2(cam_extrinsics, cam_intrinsics, images_folder):
     return cam_infos
 
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, path, rgb_mapping):
+def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, path, n_views, rgb_mapping, flow_checkpoint='things', dataset_type='llff'):
     cam_infos = []
+    model_zoe = None
     for idx, key in enumerate(sorted(cam_extrinsics.keys())):
         sys.stdout.write('\r')
         # the exact output you're looking for:
@@ -177,15 +182,28 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, path, rgb_m
         uid = intr.id
         R = np.transpose(qvec2rotmat(extr.qvec))
         T = np.array(extr.tvec)
-        bounds = np.load(os.path.join(path, 'poses_bounds.npy'))[idx, -2:]
+        K = np.zeros((3,3)).astype(np.float32)
+        K[2,2] = 1.
+        try:
+            bounds = np.load(os.path.join(path, 'poses_bounds.npy'))[idx, -2:]
+        except:
+            bounds = None
 
         if intr.model=="SIMPLE_PINHOLE" or intr.model=="SIMPLE_RADIAL":
             focal_length_x = intr.params[0]
+            K[0,0] = intr.params[0]
+            K[1,1] = intr.params[0]
+            K[0,2] = intr.params[1]
+            K[1,2] = intr.params[2]
             FovY = focal2fov(focal_length_x, height)
             FovX = focal2fov(focal_length_x, width)
         elif intr.model=="PINHOLE":
             focal_length_x = intr.params[0]
             focal_length_y = intr.params[1]
+            K[0,0] = intr.params[0]
+            K[1,1] = intr.params[1]
+            K[0,2] = intr.params[2]
+            K[1,2] = intr.params[3]
             FovY = focal2fov(focal_length_y, height)
             FovX = focal2fov(focal_length_x, width)
         else:
@@ -197,7 +215,28 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, path, rgb_m
         rgb_name = os.path.basename(rgb_path).split(".")[0]
         image = Image.open(rgb_path)
 
-        cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image, image_path=image_path,
+        # checkpoints = 'things'
+        # if dataset_type == 'blender':
+        #     flow = []
+        #     if 'train' in rgb_name:
+        #         for i in range(n_views):
+        #             for j in range(n_views):
+        #                 if i == j:
+        #                     continue
+        #                 flow_path = os.path.join(path, str(n_views) + '_views/flow', flow_checkpoint, rgb_name[6:] + f'_{i}_{j}.flo')
+        #                 if os.path.exists(flow_path):
+        #                     flow.append((j, readFlow(flow_path)))
+        # else:
+        flow = []
+        for i in range(n_views):
+            for j in range(n_views):
+                if i == j:
+                    continue
+                flow_path = os.path.join(path, str(n_views) + '_views/flow', flow_checkpoint, rgb_name + f'_{i}_{j}.flo')
+                if os.path.exists(flow_path):
+                    flow.append((j, readFlow(flow_path)))
+
+        cam_info = CameraInfo(uid=uid, R=R, T=T, K=K, FovY=FovY, FovX=FovX, image=image, flow=flow, image_path=image_path,
                 image_name=image_name, width=width, height=height, mask=None, bounds=bounds)
         cam_infos.append(cam_info)
 
@@ -260,7 +299,7 @@ def storePly(path, xyz, rgb):
     ply_data.write(path)
 
 
-def readColmapSceneInfo(path, images, eval, n_views=0, llffhold=8):
+def readColmapSceneInfo(path, images, eval, n_views=0, llffhold=8, dataset_type='llff', flow_checkpoint='things'):
     # ply_path = os.path.join(path, "sparse/0/points3D.ply")
     # bin_path = os.path.join(path, "sparse/0/points3D.bin")
     ply_path = os.path.join(path, str(n_views) + "_views/dense/fused.ply")
@@ -281,50 +320,115 @@ def readColmapSceneInfo(path, images, eval, n_views=0, llffhold=8):
     #     print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
     #     xyz, rgb, _ = read_points3D_binary(bin_path)
     #     storePly(ply_path, xyz, rgb)
-    pcd = fetchPly(ply_path)
+    try:
+        pcd = fetchPly(ply_path)
+    except:
+        pcd = None
+    # pcd = fetchPly(ply_path)
 
+    # if "scan110" in ply_path:
+    #     pcd.points = pcd.points[:1, :]
+    #     pcd.colors = pcd.colors[:1, :]
 
     reading_dir = "images" if images == None else images
     rgb_mapping = [f for f in sorted(glob.glob(os.path.join(path, reading_dir, '*')))
                    if f.endswith('JPG') or f.endswith('jpg') or f.endswith('png')]
     cam_extrinsics = {cam_extrinsics[k].name: cam_extrinsics[k] for k in cam_extrinsics}
     cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics,
-                             images_folder=os.path.join(path, reading_dir),  path=path, rgb_mapping=rgb_mapping)
+                             images_folder=os.path.join(path, reading_dir),  path=path, n_views=n_views, rgb_mapping=rgb_mapping, flow_checkpoint=flow_checkpoint, dataset_type=dataset_type)
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
-    if eval:
-        train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
-        test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
+    # if dataset_type != 'dtu':
+    #     if eval:
+    #         train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
+    #         test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
+
+    #     else:
+    #         train_cam_infos = cam_infos
+    #         test_cam_infos = []
+
+    #     if n_views > 0:
+    #         idx = list(range(len(train_cam_infos)))
+    #         idx_sub = np.linspace(0, len(train_cam_infos)-1, n_views)
+    #         idx_sub = [round(i) for i in idx_sub]
+    #         train_cam_infos = [c for idx, c in enumerate(train_cam_infos) if idx in idx_sub]
+    #         idx_eval = [i for i in idx if i not in idx_sub]
+    #         eval_cam_infos = [c for idx, c in enumerate(cam_infos) if idx in idx_eval]
+    #         assert len(train_cam_infos) == n_views
+    #         # assert len(eval_cam_infos) == len(cam_infos) - len(test_cam_infos) - n_views
+
+    if dataset_type == 'dtu':
+        if eval:
+            train_idx = [25, 22, 28, 40, 44, 48, 0, 8, 13]
+            exclude_idx = [1, 2, 9, 10, 11, 12, 14, 15, 23, 24, 26, 27, 29, 30, 31, 32, 33, 34, 35, 41, 42, 43, 45, 46, 47]
+            train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx in train_idx[:n_views]]
+            test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx in exclude_idx]
+            train_cam_infos = sorted(train_cam_infos, key = lambda x : x.image_name)
+            test_cam_infos = sorted(test_cam_infos, key = lambda x : x.image_name)
+
+            eval_cam_infos = test_cam_infos
+        else:
+            train_cam_infos = cam_infos
+            test_cam_infos = []
+        
+        # if n_views > 0:
+        #     train_cam_infos = [c for idx, c in enumerate(train_cam_infos) if idx in idx_sub]
+        #     idx_eval = [i for i in idx if i not in idx_sub]
+        #     eval_cam_infos = [c for idx, c in enumerate(cam_infos) if idx in idx_eval]
+        #     assert len(train_cam_infos) == n_views
+    elif dataset_type == 'blender':
+        train_idxs = [2, 16, 26, 55, 73, 76, 86, 93]
+        if eval:
+            train_cam_infos = [c for idx, c in enumerate(cam_infos) if 'train' in c.image_name and int(c.image_name.split('_')[-1]) in train_idxs]
+            test_cam_infos = [c for idx, c in enumerate(cam_infos) if 'train' not in c.image_name]
+            eval_cam_infos = [c for idx, c in enumerate(test_cam_infos) if idx % llffhold != 0]
+            test_cam_infos = [c for idx, c in enumerate(test_cam_infos) if idx % llffhold == 0]
+            # for cam in test_cam_infos:
+            #     print(cam.width, cam.image_name)
+            # for cam in train_cam_infos:
+            #     print(cam.width, cam.image_name)
     else:
-        train_cam_infos = cam_infos
-        test_cam_infos = []
+        if eval:
+            train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
+            test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
 
-    if n_views > 0:
-        idx_sub = np.linspace(0, len(train_cam_infos)-1, n_views)
-        idx_sub = [round(i) for i in idx_sub]
-        train_cam_infos = [c for idx, c in enumerate(train_cam_infos) if idx in idx_sub]
-        assert len(train_cam_infos) == n_views
+        else:
+            train_cam_infos = cam_infos
+            test_cam_infos = []
 
+        if n_views > 0:
+            idx = list(range(len(train_cam_infos)))
+            idx_sub = np.linspace(0, len(train_cam_infos)-1, n_views)
+            idx_sub = [round(i) for i in idx_sub]
+            train_cam_infos = [c for idx, c in enumerate(train_cam_infos) if idx in idx_sub]
+            idx_eval = [i for i in idx if i not in idx_sub]
+            eval_cam_infos = [c for idx, c in enumerate(cam_infos) if idx in idx_eval]
+            assert len(train_cam_infos) == n_views
+            # assert len(eval_cam_infos) == len(cam_infos) - len(test_cam_infos) - n_views    
+    
     nerf_normalization = getNerfppNorm(train_cam_infos)
     scene_info = SceneInfo(point_cloud=pcd,
                            train_cameras=train_cam_infos,
                            test_cameras=test_cam_infos,
+                           eval_cameras=eval_cam_infos,
                            nerf_normalization=nerf_normalization,
                            ply_path=ply_path)
     return scene_info
 
 
-def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png"):
+def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png", n_views=8, flow_checkpoint='things'):
     cam_infos = []
 
     with open(os.path.join(path, transformsfile)) as json_file:
         contents = json.load(json_file)
         fovx = contents["camera_angle_x"]
 
-        skip = 8 if transformsfile == 'transforms_test.json' else 1
-        frames = contents["frames"][::skip]
+        # skip = 8 if transformsfile == 'transforms_test.json' else 1
+        # frames = contents["frames"][::skip]
+        frames = contents["frames"]
         for idx, frame in tqdm(enumerate(frames)):
             cam_name = os.path.join(path, frame["file_path"] + extension)
+            cam_name = frame["file_path"][2:] + extension
 
             # NeRF 'transform_matrix' is a camera-to-world transform
             c2w = np.array(frame["transform_matrix"])
@@ -352,31 +456,48 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             FovY = fovy
             FovX = fovx
 
+            K = np.zeros((3,3)).astype(np.float32)
+            K[2,2] = 1.
+            K[0,2] = image.size[1] / 2.
+            K[1,2] = image.size[0] / 2.
+            K[0,0] = K[1,1] = fov2focal(fovx, image.size[0])
+
             mask = norm_data[:, :, 3:4]
-            if skip == 1:
-                depth_image = np.load('../SparseNeRF/depth_midas_temp_DPT_Hybrid/Blender/' +
-                                      image_path.split('/')[-4]+'/'+image_name+'_depth.npy')
-            else:
-                depth_image = None
+            # if skip == 1:
+            #     depth_image = np.load('../SparseNeRF/depth_midas_temp_DPT_Hybrid/Blender/' +
+            #                           image_path.split('/')[-4]+'/'+image_name+'_depth.npy')
+            # else:
+            #     depth_image = None
 
             arr = cv2.resize(arr, (400, 400))
             image = Image.fromarray(np.array(arr * 255.0, dtype=np.byte), "RGB")
+            depth_image = None
             depth_image = None if depth_image is None else cv2.resize(depth_image, (400, 400))
             mask = None if mask is None else cv2.resize(mask, (400, 400))
 
+            # checkpoints = 'things'
+            flow = []
+            for i in range(n_views):
+                for j in range(n_views):
+                    if i == j:
+                        continue
+                    flow_path = os.path.join(path, str(n_views) + '_views/flow', flow_checkpoint, image_name + f'_{i}_{j}.flo')
+                    if os.path.exists(flow_path):
+                        flow.append((j, readFlow(flow_path)))
 
-            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image, image_path=image_path,
+
+            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, K=K, FovY=FovY, FovX=FovX, image=image, flow=flow, image_path=image_path,
                                         image_name=image_name, width=image.size[0], height=image.size[1],
-                                        depth_image=depth_image, mask=mask))
+                                        mask=mask, bounds=None))
     return cam_infos
 
 
 
-def readNerfSyntheticInfo(path, white_background, eval, n_views=0, extension=".png"):
+def readNerfSyntheticInfo(path, white_background, eval, n_views=0, llffhold=8, extension=".png", flow_checkpoint='things'):
     print("Reading Training Transforms")
-    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
+    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension, n_views, flow_checkpoint)
     print("Reading Test Transforms")
-    test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension)
+    test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension, n_views, flow_checkpoint)
 
     if not eval:
         train_cam_infos.extend(test_cam_infos)
@@ -384,12 +505,19 @@ def readNerfSyntheticInfo(path, white_background, eval, n_views=0, extension=".p
 
     pseudo_cam_infos = train_cam_infos #train_cam_infos
     if n_views > 0:
-        train_cam_infos = train_cam_infos[:n_views]
-        assert len(train_cam_infos) == n_views
+        if n_views > 0:
+            train_cam_infos = [c for idx, c in enumerate(train_cam_infos) if idx in [2, 16, 26, 55, 73, 76, 86, 93]]
+        eval_cam_infos = test_cam_infos
+        test_cam_infos = [c for idx, c in enumerate(test_cam_infos) if idx % llffhold == 0]
+        # train_cam_infos = train_cam_infos[:n_views]
+        # assert len(train_cam_infos) == n_views
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
     ply_path = os.path.join(path, str(n_views) + "_views/dense/fused.ply")
+
+    print('train', [info.image_path for info in train_cam_infos])
+    print('eval', [info.image_path for info in eval_cam_infos])
 
     # if not os.path.exists(ply_path):
     #     # Since this data set has no colmap data, we start with random points
@@ -411,7 +539,7 @@ def readNerfSyntheticInfo(path, white_background, eval, n_views=0, extension=".p
     scene_info = SceneInfo(point_cloud=pcd,
                            train_cameras=train_cam_infos,
                            test_cameras=test_cam_infos,
-                           pseudo_cameras=pseudo_cam_infos,
+                           eval_cameras=eval_cam_infos,
                            nerf_normalization=nerf_normalization,
                            ply_path=ply_path)
     return scene_info

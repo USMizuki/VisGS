@@ -21,3 +21,4 @@ dependencies:
     - opencv_python==4.8.1.78
     - imageio==2.31.2
     - open3d==0.17.0
+    - tensorboard

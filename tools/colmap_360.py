@@ -138,6 +138,8 @@ def pipeline(scene, base_path, n_views):
     os.mkdir('created')
     os.mkdir('triangulated')
     os.mkdir('images')
+    os.mkdir('images_4')
+    os.mkdir('images_8')
     os.system('colmap model_converter  --input_path ../sparse/0/ --output_path ../sparse/0/  --output_type TXT')
 
 
@@ -167,6 +169,12 @@ def pipeline(scene, base_path, n_views):
 
     for img_name in train_img_list:
         os.system('cp ../images/' + img_name + '  images/' + img_name)
+    
+    for img_name in train_img_list:
+        os.system('cp ../images_4/' + img_name + '  images_4/' + img_name)
+
+    for img_name in train_img_list:
+        os.system('cp ../images_8/' + img_name + '  images_8/' + img_name)
 
     os.system('cp ../sparse/0/cameras.txt created/.')
     with open('created/points3D.txt', "w") as fid:
@@ -191,7 +199,9 @@ def pipeline(scene, base_path, n_views):
     os.system('colmap stereo_fusion --workspace_path dense --output_path dense/fused.ply')
 
 
-for scene in ['bicycle', 'bonsai', 'counter', 'garden',  'kitchen', 'room', 'stump']:
-    pipeline(scene, base_path = '/ssd1/zehao/FSGS/dataset/mipnerf360/', n_views = 24)  # please use absolute path!
+for n in [24]:
+    for scene in ['bicycle', 'bonsai', 'counter', 'garden',  'kitchen', 'room', 'stump']:
+    # for scene in ['bicycle']:
+        pipeline(scene, base_path = '/mnt/lab/zyl/models/NexusGS-anneal/dataset/mip360_2/', n_views = n)  # please use absolute path!
 
 

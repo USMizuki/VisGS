@@ -55,6 +55,13 @@ class ModelParams(ParamGroup):
         self.data_device = "cuda"
         self.eval = False
         self.n_views = 0
+
+        self.valid_dis_threshold = 1.
+        self.drop_rate = 1.
+        self.dataset_type = 'llff'
+        self.near_n = 1
+        self.flow_type = 'disxgrad'
+        self.flow_checkpoint = 'things'
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -74,6 +81,7 @@ class PipelineParams(ParamGroup):
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
         self.iterations = 10_000
+        self.iterations_pre = 0
         self.position_lr_init = 0.00016
         self.position_lr_final = 0.0000016
         self.position_lr_delay_mult = 0.01
@@ -97,6 +105,17 @@ class OptimizationParams(ParamGroup):
         self.dist_thres = 10.
         self.depth_weight = 0.05
         self.depth_pseudo_weight = 0.5
+
+        self.diffusion_inpaint_iter = -1
+        self.size_threshold = -1
+        self.live_num = 0
+        self.prune_depth_threshold = -1
+        self.prune_depth_scale = 9
+        self.prune_interval = -1
+        self.prune_dis_interval = 500
+        self.prune_dis_threshold = 5
+        self.dis_prune = False
+        self.split_num = 4
         super().__init__(parser, "Optimization Parameters")
 
 
