@@ -27,7 +27,7 @@ for n in "${n_views[@]}";
 do
 
 dataset=dataset/nerf_llff_data/$name
-workspace=output/exp/llff/$exp_name/$name/${n}_views
+workspace=output/exp_vis/llff/$exp_name/$name/${n}_views
 
 #python train.py --source_path $dataset --model_path $workspace --eval --n_views 3 \
 #    --sample_pseudo_interval 1 \
