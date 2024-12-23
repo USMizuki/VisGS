@@ -42,6 +42,7 @@ class CameraInfo(NamedTuple):
     FovX: np.array
     image: np.array
     flow: list
+    visibility: list
     image_path: str
     image_name: str
     width: int
@@ -228,15 +229,26 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, path, n_vie
         #                     flow.append((j, readFlow(flow_path)))
         # else:
         flow = []
+        visibility = []
         for i in range(n_views):
+            if len(visibility) == n_views:
+                break
+            else:
+                visibility = []
             for j in range(n_views):
                 if i == j:
+                    visibility.append(None)
                     continue
                 flow_path = os.path.join(path, str(n_views) + '_views/flow', flow_checkpoint, rgb_name + f'_{i}_{j}.flo')
+                visibility_path = os.path.join(path, str(n_views) + '_views/visibility_weights', rgb_name + f'_{i}_{j}.npy')
                 if os.path.exists(flow_path):
                     flow.append((j, readFlow(flow_path)))
+                
+                if os.path.exists(visibility_path):
+                    visibility.append(np.load(visibility_path))
+            
 
-        cam_info = CameraInfo(uid=uid, R=R, T=T, K=K, FovY=FovY, FovX=FovX, image=image, flow=flow, image_path=image_path,
+        cam_info = CameraInfo(uid=uid, R=R, T=T, K=K, FovY=FovY, FovX=FovX, image=image, flow=flow, visibility=visibility, image_path=image_path,
                 image_name=image_name, width=width, height=height, mask=None, bounds=bounds)
         cam_infos.append(cam_info)
 

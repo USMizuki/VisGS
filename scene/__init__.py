@@ -49,6 +49,7 @@ class Scene:
         self.test_cameras = {}
         self.pseudo_cameras = {}
         self.eval_cameras = {}
+        self.train_dual_cameras = {}
 
         if os.path.exists(os.path.join(args.source_path, "sparse")):
             scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval, args.n_views, dataset_type=args.dataset_type)
@@ -87,6 +88,13 @@ class Scene:
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
             print("Loading Eval Cameras")
             self.eval_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.eval_cameras, resolution_scale, args)
+
+            self.train_dual_cameras[resolution_scale] = []
+            for i, cam_s in enumerate(self.train_cameras[resolution_scale]):
+                for j, cam_t in enumerate(self.train_cameras[resolution_scale]):
+                    if i == j:
+                        continue
+                    self.train_dual_cameras[resolution_scale].append((i, cam_s, j, cam_t))
 
             # pseudo_cams = []
             # if args.source_path.find('llff'):
@@ -128,6 +136,9 @@ class Scene:
 
     def getTrainCameras(self, scale=1.0):
         return self.train_cameras[scale]
+
+    def getTrainDualCameras(self, scale=1.0):
+        return self.train_dual_cameras[scale]
 
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]

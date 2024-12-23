@@ -24,6 +24,7 @@ import open3d as o3d
 from torch.optim.lr_scheduler import MultiStepLR
 from utils.sh_utils import eval_sh
 from gtracer import GaussianTracer
+import trimesh
 
 
 class GaussianModel:
@@ -66,7 +67,12 @@ class GaussianModel:
         self.bg_color = torch.empty(0)
         self.confidence = torch.empty(0)
 
+        icosahedron = trimesh.creation.icosahedron()
+        self.unit_icosahedron_vertices = torch.from_numpy(icosahedron.vertices).float().cuda() * 1.2584 
+        self.unit_icosahedron_faces = torch.from_numpy(icosahedron.faces).long().cuda()
+
         self.gaussian_tracer = GaussianTracer(transmittance_min=transmittance_min)
+        self.alpha_min = 1 / 255
 
     def capture(self):
         return (
@@ -743,6 +749,20 @@ class GaussianModel:
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling,
                                    new_rotation, new_origin_xyz, new_xyz_weight)
 
+    def get_boundings(self, alpha_min=0.01):
+        mu = self.get_xyz
+        opacity = self.get_opacity
+        
+        L = build_scaling_rotation(self.get_scaling, self._rotation)
+        
+        vertices_b = (2 * (opacity/alpha_min).log()).sqrt()[:, None] * (self.unit_icosahedron_vertices[None] @ L.transpose(-1, -2)) + mu[:, None]
+        faces_b = self.unit_icosahedron_faces[None] + torch.arange(mu.shape[0], device="cuda")[:, None, None] * 12
+        gs_id = torch.arange(mu.shape[0], device="cuda")[:, None].expand(-1, faces_b.shape[1])
+        return vertices_b.reshape(-1, 3), faces_b.reshape(-1, 3), gs_id.reshape(-1)
+
+    def get_SinvR(self):
+        return build_scaling_rotation(1 / self.get_scaling, self._rotation)
+    
     def build_bvh(self):
         vertices_b, faces_b, gs_id = self.get_boundings(alpha_min=self.alpha_min)
         self.gaussian_tracer.build_bvh(vertices_b, faces_b, gs_id)
@@ -762,3 +782,12 @@ class GaussianModel:
             "depth": depth,
             "alpha" : alpha,
         }
+
+    def prune_invisible(self, cams):
+        rays_o = self.get_xyz
+        prune_mask = torch.ones((rays_o.shape[0]), dtype=bool, device="cuda")
+        for cam in cams:
+            rays_d = cam.camera_center.view(1,3) - rays_o
+            results = self.trace(rays_o, rays_d)
+            prune_mask = torch.logical_and(prune_mask, results["alpha"] > 0.95)
+        self.prune_points(prune_mask, 0)

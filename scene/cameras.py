@@ -14,11 +14,12 @@ from torch import nn
 import numpy as np
 import cv2
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix
+import torch.nn.functional as F
 
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, K, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid, trans=np.array([0.0, 0.0, 0.0]),
-                 scale=1.0, data_device = "cuda", mask = None, bounds=None, flow=None):
+                 scale=1.0, data_device = "cuda", mask = None, bounds=None, flow=None, visibility=None):
         super(Camera, self).__init__()
 
         self.uid = uid
@@ -35,6 +36,12 @@ class Camera(nn.Module):
             self.alpha_mask = None
         self.bounds = bounds
         self.flow = flow
+        if visibility is None:
+            self.visibility = None
+        else:
+            self.visibility = []
+            for vis in visibility:
+                self.visibility.append(torch.from_numpy(vis).float() if vis is not None else None)
 
         try:
             self.data_device = torch.device(data_device)
@@ -75,6 +82,25 @@ class Camera(nn.Module):
     
     def set_mask(self, mask):
         self.mask = mask.to(self.data_device)
+    
+    def get_visbility_depth_rays(self, camera_center, depth):
+        # rays_o = gaussians.get_xyz
+        depth = depth.squeeze().reshape(-1, 1)
+
+        v, u = torch.meshgrid(torch.arange(self.image_height, device='cuda'),
+                                torch.arange(self.image_width, device='cuda'), indexing="ij")
+        coords = torch.stack([u,v,torch.ones_like(u)], dim=-1).float().view(-1, 3)
+        xyzs = coords * depth.repeat(1, 3)
+        xyzs_cam = xyzs @ torch.from_numpy(self.K).cuda().inverse().float()
+        R = torch.tensor(self.R).cuda().float()
+        T = torch.tensor(self.T).cuda().float()
+        rays_o = (xyzs_cam - T) @ R.T
+        # rays_o = torch.cat([xyzs_cam, torch.ones((xyzs_cam.shape[0], 1)).cuda()], dim=-1) @ self.world_view_transform.inverse()
+        # rays_o = rays_o[:, :3]
+
+        rays_d = F.normalize(camera_center.view(1,3) - rays_o, dim=-1)
+        # print(rays_o.shape, rays_d.shape, shift.shape)
+        return rays_o, rays_d
 
 
 

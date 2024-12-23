@@ -14,11 +14,11 @@ import math
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
-
+from .tracing import render_trace, render_image_trace
 
 
 def render(viewpoint_camera, pc, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0,
-           override_color = None, white_bg = False):
+           override_color = None, white_bg = False, tgt_viewpoint_camera=None):
     """
     Render the scene.
 
@@ -121,16 +121,41 @@ def render(viewpoint_camera, pc, pipe, bg_color : torch.Tensor, scaling_modifier
 
     if min(pc.bg_color.shape) != 0:
         rendered_image = rendered_image + (1 - alpha) * torch.sigmoid(pc.bg_color)  # torch.ones((3, 1, 1)).cuda()
-
-
-    # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
-    # They will be excluded from value updates used in the splitting criteria.
-    return {"render": rendered_image,
+    
+    H = rendered_image.shape[1]
+    W = rendered_image.shape[2]
+    
+    results = {"render": rendered_image,
             "viewspace_points": screenspace_points,
             "visibility_filter" : radii > 0,
             "radii": radii,
             "depth": depth,
             "alpha": alpha}
+
+    if tgt_viewpoint_camera is not None:
+        # with torch.no_grad():
+        rays_o, rays_d = viewpoint_camera.get_visbility_depth_rays(tgt_viewpoint_camera.camera_center, depth)
+        rendered_visibility = 1 - render_trace(rays_o, rays_d, pc, pipe, bg_color)["alpha"].reshape(H, W, 1).permute(2, 0, 1).squeeze()
+        results["depth_visibility"] = rendered_visibility
+
+        # rays_o = pc.get_xyz
+        # rays_d = tgt_viewpoint_camera.camera_center.view(1,3) - rays_o
+        # xyz_visible = (1 - render_trace(rays_o, rays_d, pc, pipe, bg_color)["alpha"]).repeat(1,3)
+        # rasterizer_visibility = GaussianRasterizer(raster_settings=raster_settings)
+        # rendered_visibility, _, _, _ = rasterizer(
+        #     means3D = means3D,
+        #     means2D = means2D,
+        #     shs = None,
+        #     colors_precomp = xyz_visible,
+        #     opacities = opacity,
+        #     scales = scales,
+        #     rotations = rotations,
+        #     cov3D_precomp = cov3D_precomp)
+        # results["visibility"] = rendered_visibility[0].squeeze()
+
+    # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
+    # They will be excluded from value updates used in the splitting criteria.
+    return results
 
 
 def render_filter_depth(viewpoint_camera, pc, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0,

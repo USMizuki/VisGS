@@ -36,8 +36,10 @@ from arguments import ModelParams, PipelineParams, OptimizationParams
 from lpipsPyTorch import lpips
 import torch.nn.functional as F
 from torchvision import transforms
+from torchvision import utils as vutils
 
 from utils.sh_utils import eval_sh
+from utils.render_utils import apply_depth_colormap
 
 #from diffusers import StableDiffusionInpaintPipeline
 
@@ -248,6 +250,7 @@ def training(dataset, opt, pipe, args):
             
 
     gaussians.training_setup(opt)
+    gaussians.build_bvh()
     # gaussians_sparse.training_setup_sparse(opt)
 
     del gaussians_mvs
@@ -267,6 +270,10 @@ def training(dataset, opt, pipe, args):
     # if args.dataset_type == 'blender':
     #     for cam in scene.getTrainCameras().copy():
     #         gaussians.prune(args, viewpoint_cam, None, opt.prune_depth_threshold)
+
+    debug_path = os.path.join(dataset.model_path, "debug")
+    if not os.path.exists(debug_path):
+        os.makedirs(debug_path)
 
     for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
@@ -294,9 +301,8 @@ def training(dataset, opt, pipe, args):
 
         # Pick a random Camera
         if not viewpoint_stack:
-            viewpoint_stack = scene.getTrainCameras().copy()
-
-        viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+            viewpoint_stack = scene.getTrainDualCameras().copy()
+        cam_s, viewpoint_cam, cam_t, tgt_viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
         gt_image = viewpoint_cam.original_image.cuda()
 
         if args.dataset_type == 'dtu':
@@ -318,7 +324,7 @@ def training(dataset, opt, pipe, args):
         elif args.dataset_type == 'blender':
             bg_mask = (gt_image.min(0, keepdim=True).values > 254/255)
 
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background)
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, tgt_viewpoint_camera=tgt_viewpoint_cam)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         # Loss
@@ -354,6 +360,8 @@ def training(dataset, opt, pipe, args):
         rendered_depth = render_pkg["depth"]
         flow_depth = viewpoint_cam.flow_depth.cuda().unsqueeze(0)
 
+        # loss += F.mse_loss(render_pkg["visibility"], render_pkg["depth_visibility"]) * 0.1
+        loss += F.mse_loss(viewpoint_cam.visibility[cam_t].cuda(), render_pkg["depth_visibility"]) * 0.1
 
         if rendered_depth.shape[0] != 0 and iteration > 0 and opt.depth_weight != 0:
             if args.dataset_type == 'dtu':
@@ -402,6 +410,12 @@ def training(dataset, opt, pipe, args):
 
         loss.backward(retain_graph=True)
         with torch.no_grad():
+            if iteration % 100 == 0:
+                iteration_str = '{0:05d}'.format(iteration)
+                vutils.save_image(apply_depth_colormap(render_pkg["depth"]).detach().cpu(), os.path.join(dataset.model_path, "debug", f'{iteration_str}_depth.png'))
+                vutils.save_image(render_pkg["render"].detach().cpu(), os.path.join(dataset.model_path, "debug", f'{iteration_str}.png'))
+                vutils.save_image(render_pkg["depth_visibility"].unsqueeze(0).detach().cpu(), os.path.join(dataset.model_path, "debug", f'{iteration_str}_depth_visibility.png'))
+                # vutils.save_image(render_pkg["visibility"].unsqueeze(0).detach().cpu(), os.path.join(dataset.model_path, "debug", f'{iteration_str}_visibility.png'))
             # Progress bar
             if not loss.isnan():
                 ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
@@ -429,41 +443,45 @@ def training(dataset, opt, pipe, args):
             #                scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
             # Densification
+            is_densify = False
             if  iteration < opt.densify_until_iter and iteration not in clean_iterations:
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
-                if iteration == opt.diffusion_inpaint_iter and opt.diffusion_inpaint_iter != -1:
-                    diffusion = StableDiffusionInpaintPipeline.from_pretrained(
-                        "checkpoints/runwayml/stable-diffusion-inpainting",
-                        revision="fp16",
-                        torch_dtype=torch.float16,
-                    ).to("cuda")
-                    for idx, cam in enumerate(scene.getEvalCameras()):
-                        render_pkg = render(cam, gaussians, pipe, background)
-                        image = render_pkg["render"]
-                        # render_pkg = render_point_mask(cam, gaussians, pipe, background)
-                        # point_depth = render_pkg["depth"]
-                        # mask = (point_depth != 0.).float()
-                        mask = cam.mask
+                # if iteration == opt.diffusion_inpaint_iter and opt.diffusion_inpaint_iter != -1:
+                #     diffusion = StableDiffusionInpaintPipeline.from_pretrained(
+                #         "checkpoints/runwayml/stable-diffusion-inpainting",
+                #         revision="fp16",
+                #         torch_dtype=torch.float16,
+                #     ).to("cuda")
+                #     for idx, cam in enumerate(scene.getEvalCameras()):
+                #         render_pkg = render(cam, gaussians, pipe, background)
+                #         image = render_pkg["render"]
+                #         # render_pkg = render_point_mask(cam, gaussians, pipe, background)
+                #         # point_depth = render_pkg["depth"]
+                #         # mask = (point_depth != 0.).float()
+                #         mask = cam.mask
                         
-                        prompt = "green leaves"
-                        #prompt = "flowers"
-                        image_inpaint = diffusion(prompt=prompt, image=image * mask, mask_image=1. - mask).images[0]
-                        image_inpaint = image_inpaint.resize((image.shape[2], image.shape[1]))
-                        image_inpaint.save(os.path.join('output/inpaint', str(idx) + '_inpainted' + '.png'))
+                #         prompt = "green leaves"
+                #         #prompt = "flowers"
+                #         image_inpaint = diffusion(prompt=prompt, image=image * mask, mask_image=1. - mask).images[0]
+                #         image_inpaint = image_inpaint.resize((image.shape[2], image.shape[1]))
+                #         image_inpaint.save(os.path.join('output/inpaint', str(idx) + '_inpainted' + '.png'))
                         
-                        torchvision.utils.save_image(image, os.path.join('output/inpaint', str(idx) + '_rendered_image' + '.png'))
-                        torchvision.utils.save_image(image * mask, os.path.join('output/inpaint', str(idx) + '_masked_image' + '.png'))
-                        torchvision.utils.save_image(mask, os.path.join('output/inpaint', str(idx) + '_mask' + '.png'))
+                #         torchvision.utils.save_image(image, os.path.join('output/inpaint', str(idx) + '_rendered_image' + '.png'))
+                #         torchvision.utils.save_image(image * mask, os.path.join('output/inpaint', str(idx) + '_masked_image' + '.png'))
+                #         torchvision.utils.save_image(mask, os.path.join('output/inpaint', str(idx) + '_mask' + '.png'))
 
-                        image_inpaint = transforms.ToTensor()(image_inpaint).cuda()
+                #         image_inpaint = transforms.ToTensor()(image_inpaint).cuda()
                         
-                        image_final = image_inpaint * (1. - mask) + image * mask
-                        cam.set_image(image_final)
+                #         image_final = image_inpaint * (1. - mask) + image * mask
+                #         cam.set_image(image_final)
 
-                        torchvision.utils.save_image(image_final, os.path.join('output/inpaint', str(idx) + '_inpainted_final' + '.png'))
-                    del diffusion
+                #         torchvision.utils.save_image(image_final, os.path.join('output/inpaint', str(idx) + '_inpainted_final' + '.png'))
+                #     del diffusion
+
+                if iteration % 1000 == 0:
+                    gaussians.prune_invisible(scene.getTrainCameras())
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = opt.size_threshold
@@ -482,6 +500,7 @@ def training(dataset, opt, pipe, args):
 
 
                     #size_threshold = None
+                    is_densify = True
                     gaussians.densify_and_prune(opt.densify_grad_threshold, opt.prune_threshold, scene.cameras_extent, size_threshold, iteration, opt.dis_prune, opt.split_num)
                     # gaussians_sparse.densify_and_prune(opt.densify_grad_threshold, opt.prune_threshold, scene.cameras_extent, size_threshold, iteration, opt.dis_prune, opt.split_num)
 
@@ -492,6 +511,7 @@ def training(dataset, opt, pipe, args):
                             gaussians.prune_points(gaussians.get_xyz[:,-1] < -0.2, 0)      
 
                 if iteration > opt.densify_from_iter and iteration % opt.prune_interval == 0 and opt.prune_interval != -1:
+                    is_densify = True
                     # gaussians.prune(scene.getTrainCameras(), opt.prune_depth_threshold)
                     gaussians.prune(args, viewpoint_cam, rendered_depth, opt.prune_depth_threshold)
                     # gaussians_sparse.prune(args, viewpoint_cam, rendered_depth, opt.prune_depth_threshold)
@@ -522,6 +542,11 @@ def training(dataset, opt, pipe, args):
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
+            
+            if is_densify:
+                gaussians.build_bvh()
+            else:
+                gaussians.update_bvh()
 
             gaussians.update_learning_rate(iteration)
             if (iteration - args.start_sample_pseudo - 1) % opt.opacity_reset_interval == 0 and \

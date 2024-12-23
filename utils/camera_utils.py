@@ -72,11 +72,25 @@ def loadCam(args, id, cam_info, resolution_scale, pcd=None):
                 f[:, :, 0] = f[:, :, 0] / scale_x
                 f[:, :, 1] = f[:, :, 1] / scale_y
             flow.append((i, f))
+
+        visibility = []
+        for vis in cam_info.visibility:
+            if vis is None:
+                visibility.append(None)
+            else:
+                if vis.shape[0] != resolution[1] or vis.shape[1] != resolution[0]:
+                    # scale_x = (f.shape[1] / resolution[0])
+                    # scale_y = (f.shape[0] / resolution[1])
+                    vis = cv2.resize(vis.unsqueeze(-1), resolution).squeeze()
+                    # f[:, :, 0] = f[:, :, 0] / scale_x
+                    # f[:, :, 1] = f[:, :, 1] / scale_y
+                visibility.append(vis)
+
     return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, K=K,
                   FoVx=cam_info.FovX, FoVy=cam_info.FovY,  image=gt_image, gt_alpha_mask=loaded_mask,
                   uid=id, data_device=args.data_device, image_name=cam_info.image_name,
                   mask=mask, bounds=cam_info.bounds,
-                  flow=flow)
+                  flow=flow, visibility=visibility)
 
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args, pcd=None):
