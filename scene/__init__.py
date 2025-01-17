@@ -125,6 +125,7 @@ class Scene:
             for resolution_scale in resolution_scales:
                 compute_depth_by_flow(self.train_cameras[resolution_scale], args.valid_dis_threshold, args.near_n, args.flow_type)
             self.gaussians.create_from_pcd(scene_info.point_cloud, gaussians_mvs.get_xyz, gaussians_mvs.get_features, None, self.cameras_extent, args.drop_rate)
+            # self.gaussians.create_from_sparse_pcd(scene_info.point_cloud, self.cameras_extent)
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
